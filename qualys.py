@@ -1,4 +1,5 @@
 import functools
+import itertools
 import requests
 import getpass
 import xmltodict
@@ -32,7 +33,7 @@ def menu(sess):
                     break
     finally:
         closeSession(sess)
- 
+
 
 # Establish a session to Qualys
 def connect():
@@ -45,12 +46,12 @@ def connect():
         'username': user,
         'password': password
     }
- 
+
     # Setup session with a timeout
     sess = requests.Session()
     response = sess.post(baseURL + 'session/', params, headers=headers)
     for method in ('get', 'post'):
-        setattr(sess, method, functools.partial(getattr(sess, method), timeout=15))
+        setattr(sess, method, functools.partial(getattr(sess, method), timeout=60))
 
     # Quit if not successful
     if response.status_code != 200:
@@ -64,11 +65,11 @@ def closeSession(sess):
     params = {
         'action': 'logout'
     }
- 
+
     response = sess.post(baseURL + 'session/', params, headers=headers)
 
     sess.close()
- 
+
 
 def getHostByIP(sess, ipAddr):
     params = {
@@ -80,7 +81,7 @@ def getHostByIP(sess, ipAddr):
     host = xmltodict.parse(hostReq.text)['HOST_LIST_OUTPUT']['RESPONSE']['HOST_LIST']['HOST']
 
     print(host['ID'] + '\t' + host['DNS_DATA']['HOSTNAME'])
- 
+
 
 def getHostVulns(sess):
     ipAddr = input('IP address: ')
@@ -123,32 +124,48 @@ def getHostVulns(sess):
         print(dataStr)
 
 
-def ignoreRestoreVuln(sess):
-    qid = input('QID: ')
+# Helper function to get chunks of IPs
+def chunk(list, size):
+    for i in range(0, len(list), size):
+        yield list[i:i + size]
 
+
+def ignoreRestoreVuln(sess):
+    qid = input('QID (up to 10): ')
+    
     # Get a valid action input, i or r
     while True:
         action = input('I\u0332gnore or R\u0332estore: ')
         if action.lower() in ('i', 'r'):
             break
- 
-    ipAddr = input('IP target: ')
-    comment = input('Comment: ')
 
+#    while True:
+#        ipAddr = input('IP targets (500 characters): ')
+#        if len(ipAddr) < 500:
+#            break
+
+    ipAddr = input('IP targets:').split(',')
+    comment = input('Comment: ')
+    
     # If ignoring, set reopen date
     if action.lower() == 'i':
-        reopenDate = input('Reopen date: ')
-
-    if action.lower() == 'i':
-        ignoreVulnReq(sess, qid, ipAddr, comment, reopenDate)
+        reopenDate = input('Reopen date (mm/dd/yyyy): ')
+        for ipSet in chunk(ipAddr, 30):
+            print('Processing chunk...')
+            ignoreVulnReq(sess, qid, ipSet, comment, reopenDate)
+        #ignoreVulnReq(sess, qid, ipAddr, comment, reopenDate)
     else:
-        restoreVulnReq(sess, qid, ipAddr, comment)
+        for ipSet in chunk(ipAddr, 30):
+            print('Processing chunk...')
+            restoreVulnReq(sess, qid, ipSet, comment)
+        #restoreVulnReq(sess, qid, ipAddr, comment)
+
 
 def ignoreVulnReq(sess, qid, ipAddr, comment, reopenDate):
     params = {
         'action': 'ignore',
         'qids': qid,
-        'ips': ipAddr,
+        'ips': ','.join(ipAddr),
         'comments': comment,
         'reopen_ignored_date': reopenDate
     }
@@ -160,21 +177,19 @@ def ignoreVulnReq(sess, qid, ipAddr, comment, reopenDate):
         print(ignored['@status'] + ' ignored ' + ignored['@number'])
     else:
         print("Error " + ignored['MESSAGE'])
-        
+
 
 def restoreVulnReq(sess, qid, ipAddr, comment):
     params = {
         'action': 'restore',
         'qids': qid,
-        'ips': ipAddr,
+        'ips': ','.join(ipAddr),
         'comments': comment
     }
 
     restoreResponse = sess.post(baseURL + 'ignore_vuln/index.php', params, headers=headers)
-
     print(restoreResponse.text)
 
- 
 
 if __name__ == '__main__':
     sess = connect()
